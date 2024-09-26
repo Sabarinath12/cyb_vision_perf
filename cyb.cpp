@@ -5,12 +5,17 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <array>
+#include <thread>
+#include <mutex>
 
 using namespace std;
 using namespace cv;
 
 static long double prevTotal = 0, prevIdle = 0;
 static float cpuUsage = 0.0f;
+static string netStatus = "Disconnected"; // Shared network status
+static mutex netMutex; // Mutex for thread safety
 
 // Function to get CPU usage
 float getCPUUsage() {
@@ -67,29 +72,21 @@ float getRAMUsage() {
     return ((total - free) / static_cast<float>(total)) * 100.0;
 }
 
-// Function to check network connection status
-string getNetworkStatus() {
-    ifstream netFile("/proc/net/dev");
-    string line;
-    bool isConnected = false;
+// Function to check network connection status by pinging google.com
+void pingNetwork() {
+    while (true) {
+        const char* cmd = "ping -c 1 google.com > /dev/null 2>&1"; // Ping once and suppress output
+        int result = system(cmd); // Execute the command
 
-    while (getline(netFile, line)) {
-        // Check if any interface has received bytes (not just loopback)
-        if (line.find("lo:") == string::npos) {
-            size_t pos = line.find(":");
-            if (pos != string::npos) {
-                string interfaceName = line.substr(0, pos);
-                // Ignore empty or disconnected interfaces
-                if (line.find_first_of("0123456789") != string::npos) {
-                    isConnected = true;
-                    break;
-                }
-            }
+        string currentStatus = (result == 0) ? "Connected" : "Disconnected";
+
+        {
+            lock_guard<mutex> lock(netMutex); // Lock mutex for thread safety
+            netStatus = currentStatus; // Update the shared network status
         }
-    }
 
-    netFile.close();
-    return isConnected ? "Connected" : "Disconnected";
+        std::this_thread::sleep_for(std::chrono::seconds(5)); // Ping every 5 seconds
+    }
 }
 
 // Function to apply red tint using forEach
@@ -116,6 +113,9 @@ int main() {
         return -1;
     }
 
+    // Start the network ping thread
+    thread pingThread(pingNetwork);
+
     Mat frame;
     int frameSkip = 3; // Skip every 3 frames for processing
     int frameCount = 0;
@@ -124,7 +124,7 @@ int main() {
         capture >> frame;
         if (frame.empty()) break;
 
-        // Resize the frame for faster processing (adjust this as needed)
+        // Resize the frame for faster processing
         Mat resizedFrame;
         resize(frame, resizedFrame, Size(), 1.0, 1.0); // Keep full resolution for better detection
 
@@ -146,21 +146,28 @@ int main() {
         // Apply red tint to the frame
         applyRedTint(resizedFrame);
 
-        // Display CPU, RAM usage, and network status
-        float ramUsage = getRAMUsage();
-        stringstream cpuText, ramText, netText;
-
-        // Update CPU usage only every 500ms
+        // Update CPU usage
         if (frameCount % (frameSkip * 5) == 0) {
             cpuUsage = getCPUUsage(); // Update every few frames
         }
 
-        cpuText << "CPU: " << fixed << setprecision(2) << cpuUsage << "%";
-        ramText << "RAM: " << fixed << setprecision(2) << ramUsage << "%";
-        netText << "Network: " << getNetworkStatus();
-        putText(resizedFrame, cpuText.str(), Point(10, 20), FONT_HERSHEY_SIMPLEX, 0.5, Scalar(255, 255, 255), 2);
-        putText(resizedFrame, ramText.str(), Point(10, 40), FONT_HERSHEY_SIMPLEX, 0.5, Scalar(255, 255, 255), 2);
-        putText(resizedFrame, netText.str(), Point(10, 60), FONT_HERSHEY_SIMPLEX, 0.5, Scalar(255, 255, 255), 2);
+        // Get RAM usage
+        float ramUsage = getRAMUsage();
+
+        // Get the latest network status
+        {
+            lock_guard<mutex> lock(netMutex); // Lock mutex to read shared status
+            // Prepare display text
+            stringstream cpuText, ramText;
+            cpuText << "CPU: " << fixed << setprecision(2) << cpuUsage << "%";
+            ramText << "RAM: " << fixed << setprecision(2) << ramUsage << "%";
+            string netText = "Network: " + netStatus;
+
+            // Display text on frame
+            putText(resizedFrame, cpuText.str(), Point(10, 20), FONT_HERSHEY_SIMPLEX, 0.5, Scalar(255, 255, 255), 2);
+            putText(resizedFrame, ramText.str(), Point(10, 40), FONT_HERSHEY_SIMPLEX, 0.5, Scalar(255, 255, 255), 2);
+            putText(resizedFrame, netText, Point(10, 60), FONT_HERSHEY_SIMPLEX, 0.5, Scalar(255, 255, 255), 2);
+        }
 
         // Display the resulting frame
         imshow("Red-Tinted Face Detection", resizedFrame);
@@ -172,7 +179,8 @@ int main() {
         usleep(50000); // Introduce a small delay (50ms)
     }
 
-    // Release the video capture object
+    // Clean up
+    pingThread.detach(); // Detach the ping thread (if you want to let it run until the program ends)
     capture.release();
     destroyAllWindows();
     return 0;
