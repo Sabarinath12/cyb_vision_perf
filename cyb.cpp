@@ -8,6 +8,8 @@
 #include <array>
 #include <thread>
 #include <mutex>
+#include <chrono>
+#include <iomanip>
 
 using namespace std;
 using namespace cv;
@@ -15,6 +17,7 @@ using namespace cv;
 static long double prevTotal = 0, prevIdle = 0;
 static float cpuUsage = 0.0f;
 static string netStatus = "Disconnected"; // Shared network status
+static string batteryStatus = "Unknown"; // Battery status
 static mutex netMutex; // Mutex for thread safety
 
 // Function to get CPU usage
@@ -89,6 +92,30 @@ void pingNetwork() {
     }
 }
 
+// Function to get battery status
+void getBatteryStatus() {
+    ifstream batteryFile("/sys/class/power_supply/BAT0/capacity");
+    if (batteryFile.is_open()) {
+        int capacity;
+        batteryFile >> capacity;
+        batteryStatus = "Battery: " + to_string(capacity) + "%";
+        batteryFile.close();
+    } else {
+        batteryStatus = "Battery: Unknown";
+    }
+}
+
+// Function to get current date and time
+string getCurrentDateTime() {
+    auto now = chrono::system_clock::now();
+    time_t now_c = chrono::system_clock::to_time_t(now);
+    tm now_tm = *localtime(&now_c);
+
+    stringstream ss;
+    ss << put_time(&now_tm, "%Y-%m-%d %H:%M:%S"); // Format: YYYY-MM-DD HH:MM:SS
+    return ss.str();
+}
+
 // Function to apply red tint using forEach
 void applyRedTint(Mat& frame) {
     frame.forEach<Vec3b>([](Vec3b& pixel, const int* position) -> void {
@@ -146,9 +173,10 @@ int main() {
         // Apply red tint to the frame
         applyRedTint(resizedFrame);
 
-        // Update CPU usage
+        // Update CPU usage and get battery status
         if (frameCount % (frameSkip * 5) == 0) {
             cpuUsage = getCPUUsage(); // Update every few frames
+            getBatteryStatus(); // Get battery status periodically
         }
 
         // Get RAM usage
@@ -162,11 +190,13 @@ int main() {
             cpuText << "CPU: " << fixed << setprecision(2) << cpuUsage << "%";
             ramText << "RAM: " << fixed << setprecision(2) << ramUsage << "%";
             string netText = "Network: " + netStatus;
+            string dateTimeText = getCurrentDateTime();
 
             // Display text on frame
             putText(resizedFrame, cpuText.str(), Point(10, 20), FONT_HERSHEY_SIMPLEX, 0.5, Scalar(255, 255, 255), 2);
             putText(resizedFrame, ramText.str(), Point(10, 40), FONT_HERSHEY_SIMPLEX, 0.5, Scalar(255, 255, 255), 2);
             putText(resizedFrame, netText, Point(10, 60), FONT_HERSHEY_SIMPLEX, 0.5, Scalar(255, 255, 255), 2);
+            putText(resizedFrame, dateTimeText, Point(resizedFrame.cols - 200, 20), FONT_HERSHEY_SIMPLEX, 0.5, Scalar(255, 255, 255), 2);
         }
 
         // Display the resulting frame
