@@ -92,18 +92,6 @@ void pingNetwork() {
     }
 }
 
-// Function to get battery status
-void getBatteryStatus() {
-    ifstream batteryFile("/sys/class/power_supply/BAT0/capacity");
-    if (batteryFile.is_open()) {
-        int capacity;
-        batteryFile >> capacity;
-        batteryStatus = "Battery: " + to_string(capacity) + "%";
-        batteryFile.close();
-    } else {
-        batteryStatus = "Battery: Unknown";
-    }
-}
 
 // Function to get current date and time
 string getCurrentDateTime() {
